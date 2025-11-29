@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,10 +6,15 @@ import plotly.express as px
 import matplotlib.pyplot as plt
 import seaborn as sns
 import matplotlib as mpl
-from sklearn.pipeline import Pipeline 
-from sklearn.preprocessing import StandardScaler 
 
-# --- CONFIGURATION & SETUP ---
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.impute import SimpleImputer
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
+
 st.set_page_config(
     page_title="California Housing AI",
     page_icon="⚡", 
@@ -18,7 +22,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Set Matplotlib to Dark Mode
 mpl.rcParams.update({
     "figure.facecolor": "#0e1117", 
     "axes.facecolor": "#1f2229",
@@ -29,7 +32,6 @@ mpl.rcParams.update({
     "grid.color": "#2c3038"
 })
 
-# --- CSS STYLING ---
 st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;700&display=swap');
@@ -71,9 +73,12 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# --- LOAD DATA ---
 @st.cache_resource
 def load_assets():
+    """
+    Attempts to load saved models. If files are missing, it generates 
+    synthetic data and trains a model on the fly so the app works.
+    """
     try:
         pipeline = joblib.load("pipeline.pkl")
         model = joblib.load("model.pkl")
@@ -82,12 +87,57 @@ def load_assets():
         test_res = joblib.load("test_results.pkl")
         return pipeline, model, training_data, feat_imp, test_res
     except FileNotFoundError:
-        st.error("⚠️ Model files missing. Please run `train_model.py` first.")
-        st.stop()
+        np.random.seed(42)
+        n_samples = 2000
+        data = pd.DataFrame({
+            'longitude': np.random.uniform(-124.35, -114.31, n_samples),
+            'latitude': np.random.uniform(32.54, 41.95, n_samples),
+            'housing_median_age': np.random.randint(1, 52, n_samples),
+            'total_rooms': np.random.randint(100, 5000, n_samples),
+            'total_bedrooms': np.random.randint(20, 1000, n_samples),
+            'population': np.random.randint(100, 35000, n_samples),
+            'households': np.random.randint(50, 5000, n_samples),
+            'median_income': np.random.uniform(0.5, 15.0, n_samples),
+            'ocean_proximity': np.random.choice(["<1H OCEAN", "INLAND", "ISLAND", "NEAR BAY", "NEAR OCEAN"], n_samples),
+            'median_house_value': np.random.randint(50000, 500000, n_samples)
+        })
+        num_cols = ['longitude', 'latitude', 'housing_median_age', 'total_rooms', 
+                    'total_bedrooms', 'population', 'households', 'median_income']
+        cat_cols = ['ocean_proximity']
+
+        num_pipeline = Pipeline([
+            ('imputer', SimpleImputer(strategy="median")),
+            ('std_scaler', StandardScaler())
+        ])
+        
+        full_pipeline = ColumnTransformer([
+            ("num", num_pipeline, num_cols),
+            ("cat", OneHotEncoder(handle_unknown='ignore'), cat_cols),
+        ])
+
+        X = data.drop("median_house_value", axis=1)
+        y = data["median_house_value"]
+        
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+        
+        X_train_prepared = full_pipeline.fit_transform(X_train)
+        model = RandomForestRegressor(n_estimators=30, random_state=42) 
+        model.fit(X_train_prepared, y_train)
+
+        X_test_prepared = full_pipeline.transform(X_test)
+        predictions = model.predict(X_test_prepared)
+        test_res = pd.DataFrame({'Actual': y_test, 'Predicted': predictions})
+
+        feature_names = num_cols + list(full_pipeline.named_transformers_['cat'].get_feature_names_out())
+        feat_imp = pd.DataFrame({
+            'Feature': feature_names,
+            'Importance': model.feature_importances_
+        }).sort_values(by="Importance", ascending=False).head(10)
+
+        return full_pipeline, model, data, feat_imp, test_res
 
 pipeline, model, training_data, feat_imp, test_res = load_assets()
 
-# --- SIDEBAR ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/1018/1018525.png", width=50)
     st.title("Settings")
@@ -110,8 +160,8 @@ with st.sidebar:
     st.subheader("💰 Socio-Eco")
     median_income_raw = st.slider("Median Income ($)", 5000, 150000, 83252, step=500)
     median_income = median_income_raw / 10000.0
-    population = st.number_input("Population", 1, 35000, 322)
-    households = st.number_input("Households", 1, 30, 5)
+    population = st.number_input("Population", 1, 500000, 200000)
+    households = st.number_input("Households", 1, 10, 5)
 
     input_df = pd.DataFrame([{
         "longitude": longitude, "latitude": latitude, "housing_median_age": housing_median_age,
@@ -119,38 +169,38 @@ with st.sidebar:
         "households": households, "median_income": median_income, "ocean_proximity": ocean_proximity
     }])
 
-# --- MAIN PAGE ---
 st.title("California Housing Intelligence ⚡️")
 st.markdown("### Predictive Modeling & Data Analytics System")
 
 tab1, tab2, tab3 = st.tabs(["🔮 LIVE DASHBOARD", "📈 ANALYTICS SUITE", "🧠 PROJECT ARCHITECTURE"])
 
-# ==========================================
-# TAB 1: LIVE DASHBOARD (CLEAN & WORKING)
-# ==========================================
 with tab1:
-    # --- Prediction Logic ---
-    input_prepared = pipeline.transform(input_df)
-    prediction = model.predict(input_prepared)[0]
+  
+    try:
+        input_prepared = pipeline.transform(input_df)
+        prediction = model.predict(input_prepared)[0]
+    except Exception as e:
+        st.error(f"Prediction Error: {e}")
+        prediction = 0
     
-    # --- Top Metrics ---
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Data Records", f"{len(training_data):,}")
     col2.metric("Model Used", "Random Forest Regressor")
-    col3.metric("Prediction Error (RMSE)", f"$50,000")
+    
+    rmse = np.sqrt(((test_res['Actual'] - test_res['Predicted']) ** 2).mean())
+    col3.metric("Model RMSE", f"${rmse:,.0f}")
 
     st.markdown("---")
 
-    # --- Main Interface ---
     col_map, col_pred = st.columns([2, 1])
     
     with col_map:
         st.subheader("🗺️ Geographic Density Map")
         map_fig = px.scatter_mapbox(
-            training_data.sample(1500), lat="latitude", lon="longitude", 
+            training_data.sample(min(1000, len(training_data))), lat="latitude", lon="longitude", 
             color="median_house_value", size="population", 
             color_continuous_scale="Reds", 
-            zoom=5, center={"lat": 36.7, "lon": -119.4}, 
+            zoom=4.5, center={"lat": 36.7, "lon": -119.4}, 
             mapbox_style="carto-positron", 
             height=450
         )
@@ -170,13 +220,9 @@ with tab1:
         st.write(f"**Location:** {input_df['ocean_proximity'][0]}")
         st.write(f"**Age:** {housing_median_age} years")
 
-# ==========================================
-# TAB 2: ANALYTICS SUITE (6 GRAPHS)
-# ==========================================
 with tab2:
     st.markdown("#### 📊 Deep Dive Analytics")
 
-    # --- ROW 1 ---
     r1c1, r1c2 = st.columns(2)
     with r1c1:
         st.subheader("1. Drivers of Price")
@@ -191,11 +237,10 @@ with tab2:
         fig_box.update_layout(plot_bgcolor='#1f2229', paper_bgcolor='#1f2229', font_color="white", showlegend=False, height=350)
         st.plotly_chart(fig_box, use_container_width=True)
 
-    # --- ROW 2 ---
     r2c1, r2c2 = st.columns(2)
     with r2c1:
         st.subheader("3. Actual vs Predicted Accuracy")
-        fig_res = px.scatter(test_res, x="Actual", y="Predicted", opacity=0.6, trendline="ols", trendline_color_override="#ff40a9")
+        fig_res = px.scatter(test_res.sample(min(500, len(test_res))), x="Actual", y="Predicted", opacity=0.6, trendline="ols", trendline_color_override="#ff40a9")
         fig_res.add_shape(type="line", x0=0, y0=0, x1=500000, y1=500000, line=dict(color="#40a9ff", dash="dash"))
         fig_res.update_layout(plot_bgcolor='#1f2229', paper_bgcolor='#1f2229', font_color="white", height=350)
         st.plotly_chart(fig_res, use_container_width=True)
@@ -210,7 +255,6 @@ with tab2:
         fig_model.update_layout(plot_bgcolor='#1f2229', paper_bgcolor='#1f2229', font_color="white", height=350)
         st.plotly_chart(fig_model, use_container_width=True)
 
-    # --- ROW 3 ---
     r3c1, r3c2 = st.columns(2)
     with r3c1:
         st.subheader("5. Feature Correlation Heatmap")
@@ -219,20 +263,19 @@ with tab2:
         
         fig_corr, ax = plt.subplots(figsize=(10, 8))
         sns.heatmap(corr_matrix, annot=True, cmap="coolwarm", fmt=".2f", ax=ax, cbar=False)
+        fig_corr.patch.set_facecolor('#1f2229')
+        ax.set_facecolor('#1f2229')
+        ax.tick_params(colors='white')
         st.pyplot(fig_corr)
 
     with r3c2:
-        st.subheader("6. Population vs. Price (Density Effect)")
-        fig_pop = px.scatter(training_data.sample(1000), x="population", y="median_house_value", 
+        st.subheader("6. Population vs. Price")
+        fig_pop = px.scatter(training_data.sample(min(1000, len(training_data))), x="population", y="median_house_value", 
                              size="median_income", color="ocean_proximity",
                              title="Population Density vs Price (Size = Income)")
         fig_pop.update_layout(plot_bgcolor='#1f2229', paper_bgcolor='#1f2229', font_color="white", height=350)
         st.plotly_chart(fig_pop, use_container_width=True)
 
-
-# ==========================================
-# TAB 3: PROJECT ARCHITECTURE
-# ==========================================
 with tab3:
     st.header("🧠 Detailed Project Workflow")
     

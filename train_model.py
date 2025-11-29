@@ -1,4 +1,3 @@
-# train_model.py
 import pandas as pd
 import numpy as np
 import joblib
@@ -13,8 +12,6 @@ from sklearn.metrics import mean_squared_error
 
 print("1. Loading data...")
 housing = pd.read_csv("housing.csv")
-
-# --- PREPROCESSING (No Logic Changes) ---
 housing['income_cat'] = pd.cut(housing["median_income"],
                                bins=[0.0, 1.5, 3.0, 4.5, 6.0, np.inf],
                                labels=[1, 2, 3, 4, 5])
@@ -51,11 +48,8 @@ housing_prepared = full_pipeline.fit_transform(train_features)
 rf_reg = RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1)
 rf_reg.fit(housing_prepared, train_labels)
 
-# --- GENERATE GRAPH DATA ---
 print("3. Generating Advanced Graph Data...")
 
-# A. Feature Importance
-# We extract the one-hot encoded names to make the chart readable
 cat_encoder = full_pipeline.named_transformers_["cat"]["onehot"]
 cat_one_hot_attribs = list(cat_encoder.categories_[0])
 attributes = num_attribs + cat_one_hot_attribs
@@ -63,7 +57,6 @@ importances = rf_reg.feature_importances_
 feature_importance_df = pd.DataFrame({'Feature': attributes, 'Importance': importances})
 feature_importance_df = feature_importance_df.sort_values(by="Importance", ascending=False)
 
-# B. Test Set Predictions (For Actual vs Predicted Graph)
 test_features = strat_test_set.drop("median_house_value", axis=1)
 test_labels = strat_test_set["median_house_value"].copy()
 test_prepared = full_pipeline.transform(test_features)
@@ -72,14 +65,13 @@ test_predictions = rf_reg.predict(test_prepared)
 test_results_df = pd.DataFrame({
     "Actual": test_labels,
     "Predicted": test_predictions
-}).sample(300) # Save just a sample to keep file size small for the app
+}).sample(300)
 
-# --- SAVE EVERYTHING ---
 print("4. Saving artifacts...")
 joblib.dump(full_pipeline, "pipeline.pkl")
 joblib.dump(rf_reg, "model.pkl")
 joblib.dump(housing_train, "training_data.pkl")
-joblib.dump(feature_importance_df, "feature_importance.pkl") # NEW
-joblib.dump(test_results_df, "test_results.pkl")             # NEW
+joblib.dump(feature_importance_df, "feature_importance.pkl") 
+joblib.dump(test_results_df, "test_results.pkl")       
 
 print("Done! New files: feature_importance.pkl, test_results.pkl")
